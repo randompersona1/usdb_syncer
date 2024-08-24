@@ -30,6 +30,7 @@ from usdb_syncer import (
     download_options,
     errors,
     events,
+    external_apis,
     resource_dl,
     usdb_scraper,
     utils,
@@ -225,6 +226,7 @@ class _Context:
     options: download_options.Options
     txt: SongTxt
     locations: _Locations
+    musicbrainz_api: dict | None  # Response from MusicBrainzAPI.get_song
     logger: Log
     out: _TempResourceFiles = attrs.field(factory=_TempResourceFiles)
 
@@ -248,6 +250,7 @@ class _Context:
         song: UsdbSong,
         options: download_options.Options,
         tempdir: Path,
+        musicbrainz_api: dict | None,
         logger: Log,
     ) -> _Context:
         song = copy.deepcopy(song)
@@ -258,7 +261,7 @@ class _Context:
             song.sync_meta = SyncMeta.new(
                 song.song_id, paths.target_path().parent, txt.meta_tags
             )
-        return cls(song, details, options, txt, paths, logger)
+        return cls(song, details, options, txt, paths, musicbrainz_api, logger)
 
     def all_audio_resources(self) -> Iterator[str]:
         if self.txt.meta_tags.audio:
@@ -290,6 +293,17 @@ class _Context:
             url = self.txt.meta_tags.background.source_url(self.logger)
             self.logger.debug(f"downloading background from #VIDEO params: {url}")
         return url
+
+    def call_musicbrainz_api(self) -> None:
+        if self.musicbrainz_api:
+            return
+        artist = self.details.artist
+        title = self.details.title
+        self.logger.debug(f"Searching for '{artist} - {title}' on MusicBrainz.")
+        self.musicbrainz_api = external_apis.get_musicbrainz_api().get_song(
+            artist, title
+        )
+        self.logger.debug(f"MusicBrainz API responded with: {self.musicbrainz_api}")
 
 
 def _get_usdb_data(song_id: SongId, logger: Log) -> tuple[SongDetails, SongTxt]:
@@ -372,8 +386,17 @@ class _SongLoader(QtCore.QRunnable):
             self.song.upsert()
         events.SongChanged(self.song_id).post()
         with tempfile.TemporaryDirectory() as tempdir:
-            ctx = _Context.new(self.song, self.options, Path(tempdir), self.logger)
+            ctx = _Context.new(
+                song=self.song,
+                options=self.options,
+                tempdir=Path(tempdir),
+                musicbrainz_api=None,
+                logger=self.logger,
+            )
             for job in (
+                _maybe_update_year,
+                _maybe_update_genre,
+                _maybe_update_language,
                 _maybe_download_audio,
                 _maybe_download_video,
                 _maybe_download_cover,
@@ -723,3 +746,40 @@ def _write_sync_meta(ctx: _Context) -> None:
         ctx.locations, temp=False
     )
     ctx.song.sync_meta.synchronize_to_file()
+
+
+def _maybe_update_year(ctx: _Context) -> None:
+    if ctx.song.year:
+        return
+    ctx.call_musicbrainz_api()
+    if not ctx.musicbrainz_api:
+        return
+    ctx.song.year = ctx.musicbrainz_api["date"].split("-")[0]
+    ctx.txt.headers.year = str(ctx.song.year)
+    ctx.logger.info(f"Updated year to '{ctx.song.year}' using MusicBrainz.")
+
+
+def _maybe_update_genre(ctx: _Context) -> None:
+    if ctx.song.genre:
+        return
+    ctx.call_musicbrainz_api()
+    print(ctx.musicbrainz_api)
+    if not ctx.musicbrainz_api:
+        return
+    if "tag-list" not in ctx.musicbrainz_api:
+        ctx.logger.info("No genre found in MusicBrainz response.")
+        return
+    ctx.song.genre = ctx.musicbrainz_api["tag-list"][0]["name"].capitalize()
+    ctx.txt.headers.genre = ctx.song.genre
+    ctx.logger.info(f"Updated genre to '{ctx.song.genre}' using MusicBrainz.")
+
+
+def _maybe_update_language(ctx: _Context) -> None:
+    if ctx.song.language:
+        return
+    ctx.call_musicbrainz_api()
+    if not ctx.musicbrainz_api:
+        return
+    ctx.song.language = ctx.musicbrainz_api["language"]
+    ctx.txt.headers.language = ctx.song.language
+    ctx.logger.info(f"Updated language to '{ctx.song.language}' using MusicBrainz.")
