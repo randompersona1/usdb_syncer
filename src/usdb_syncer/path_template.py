@@ -51,6 +51,11 @@ class NotEnoughComponentsError(PathTemplateError):
         return "Path template must contain at least two components separated by '/'!"
 
 
+class Replaceable:
+    def replace(self) -> None:
+        pass
+
+
 @attrs.define
 class PathTemplate:
     """A path with optional placeholder names, which can be resolved by passing a
