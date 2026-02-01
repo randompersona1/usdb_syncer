@@ -209,7 +209,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: test_wheel
     if: ${{ github.event_name == 'push' }} # don't upload on manual runs
-    environment: pypi
+    environment:
+      name: pypi
+      url: https://pypi.org/p/usdb_syncer
     permissions:
       id-token: write
     steps:

@@ -34,8 +34,8 @@ jobs:
           git tag -a "v$CLEAN_VERSION" -m "Local tag"
 
           echo "Created temporary tag: v$CLEAN_VERSION"
-      - name: Build the wheel
-        run: uv build --wheel --force-pep517
+      - name: Build package
+        run: uv build --force-pep517
       - name: Upload to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
