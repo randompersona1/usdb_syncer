@@ -45,6 +45,10 @@ WizardStyle=modern dynamic
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[InstallDelete]
+Type: files; Name: "{app}\USDB_Syncer-*-Windows-install.exe"
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
