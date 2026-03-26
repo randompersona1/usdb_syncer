@@ -1,5 +1,7 @@
 """Contains a runnable song loader."""
 
+# TODO: Add separation
+
 from __future__ import annotations
 
 import copy

@@ -1,5 +1,7 @@
 """Dialog with app settings."""
 
+# TODO fix this shit
+
 from __future__ import annotations
 
 import sys
@@ -9,7 +11,7 @@ from typing import ClassVar, assert_never
 from PySide6 import QtWidgets
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QWidget
 
-from usdb_syncer import SongId, events, path_template, settings
+from usdb_syncer import SongId, events, path_template, separation, settings
 from usdb_syncer.gui import gui_utils, icons, theme
 from usdb_syncer.gui.forms.SettingsDialog import Ui_Dialog
 from usdb_syncer.path_template import PathTemplate
@@ -39,6 +41,7 @@ class SettingsDialog(Ui_Dialog, QDialog):
     _instance: ClassVar[SettingsDialog | None] = None
     _last_tab_index: ClassVar[int] = 0
     _path_template: PathTemplate | None = None
+    _separation_manager: separation.SeparationManager
 
     def __init__(self, parent: QWidget, song: UsdbSong | None) -> None:
         super().__init__(parent=parent)
@@ -78,10 +81,17 @@ class SettingsDialog(Ui_Dialog, QDialog):
         self.pushButton_browse_yass_reloaded.clicked.connect(
             lambda: self._set_location(settings.SupportedApps.YASS_RELOADED)
         )
+        self.button_select_separation_provider.clicked.connect(
+            self._on_select_separation_provider
+        )
         self.comboBox_theme.currentIndexChanged.connect(
             self._set_theme_settings_enabled
         )
         self._set_theme_settings_enabled()
+        self.comboBox_format_version.currentIndexChanged.connect(
+            self._handle_format_dependent_settings
+        )
+        self._handle_format_dependent_settings()
 
     @classmethod
     def load(cls, parent: QtWidgets.QWidget, song: UsdbSong | None) -> None:
@@ -92,11 +102,34 @@ class SettingsDialog(Ui_Dialog, QDialog):
             cls._instance = cls(parent, song)
             cls._instance.show()
 
+    def _connect_stem_separation(self, command: list[str], max_concurrent: int) -> None:
+        try:
+            self._separation_manager = separation.SeparationManager(command, max_concurrent)
+        except Exception:  # noqa: BLE001
+            self.label_is_gpu_accelerated.setText("")
+            self.label_separation_model_name.setText("")
+            self.comboBox_separation_model.clear()
+            self.comboBox_separation_model.setEnabled(False)
+            return
+
+        self.label_is_gpu_accelerated.setText("Yes" if self._separation_manager.is_gpu_accelerated() else "No")
+        self.label_separation_model_name.setText(self._separation_manager.get_name())
+        models = self._separation_manager.get_available_models()
+        self.comboBox_separation_model.clear()
+        self.comboBox_separation_model.addItems(models)
+        self.comboBox_separation_model.setEnabled(True)
+        if (stem_separation := settings.get_stem_separation()) and stem_separation.selected_model in models:
+            self.comboBox_separation_model.setCurrentText(stem_separation.selected_model)
+
     def _set_theme_settings_enabled(self) -> None:
         hidden = self.comboBox_theme.currentData() == settings.Theme.SYSTEM
         self.label_primary_color.setHidden(hidden)
         self.comboBox_primary_color.setHidden(hidden)
         self.checkBox_colored_background.setHidden(hidden)
+
+    def _handle_format_dependent_settings(self) -> None:
+        if self.comboBox_format_version.currentData() <= settings.FormatVersion.V1_0_0:
+            self.groupBox_stem_separation.setDisabled(True)
 
     def _set_location(self, app: settings.SupportedApps) -> None:
         path = self._get_executable(app)
@@ -145,6 +178,19 @@ class SettingsDialog(Ui_Dialog, QDialog):
         ).exists():
             return full_path
         return None
+
+    def _select_separation_executable(self) -> Path | None:
+        filt = "*"
+        directory = ""
+        filename = QFileDialog.getOpenFileName(self, "Select separation provider", directory, filt)[0]
+        if not filename:
+            return None
+        return Path(filename)
+
+    def _on_select_separation_provider(self) -> None:
+        if path := self._select_separation_executable():
+            self.label_separation_command_path.setText(str(path))
+            self._connect_stem_separation([str(path)], 2)
 
     def _populate_comboboxes(self) -> None:
         combobox_settings = (
@@ -227,6 +273,15 @@ class SettingsDialog(Ui_Dialog, QDialog):
             )
         )
         self.checkBox_audio_embed_artwork.setChecked(settings.get_audio_embed_artwork())
+
+        stem_separation = settings.get_stem_separation()
+        self.groupBox_stem_separation.setChecked(stem_separation.enabled)
+        self.label_separation_command_path.setText(stem_separation.executable_path)
+        if stem_separation.enabled and stem_separation.executable_path:
+            self._connect_stem_separation(
+                [stem_separation.executable_path], 2
+            )  # TODO user configurable
+
         self.groupBox_video.setChecked(settings.get_video())
         self.comboBox_videocontainer.setCurrentIndex(
             self.comboBox_videocontainer.findData(settings.get_video_format())
@@ -347,6 +402,14 @@ class SettingsDialog(Ui_Dialog, QDialog):
             self.comboBox_audio_normalization.currentData()
         )
         settings.set_audio_embed_artwork(self.checkBox_audio_embed_artwork.isChecked())
+
+        settings.set_stem_separation(
+            settings.StemSeparation(
+                self.groupBox_stem_separation.isChecked(),
+                self.label_separation_command_path.text(),
+                self.comboBox_separation_model.currentText(),
+            )
+        )
         settings.set_video(self.groupBox_video.isChecked())
         settings.set_video_format(self.comboBox_videocontainer.currentData())
         settings.set_video_format_new(self.comboBox_videoencoder.currentData())
